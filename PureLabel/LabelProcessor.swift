@@ -86,8 +86,9 @@ enum LabelProcessor {
         let bpr = cgImage.bytesPerRow
         if bpp < 3 { return nil }
 
-        let minR = max(2.0, labelCircle.radius * 0.03)
-        let maxR = max(minR + 2.0, labelCircle.radius * 0.12)
+        let minR = max(2.0, labelCircle.radius * 0.02)
+        // Support 7-inch / 45 RPM wide center holes (can approach ~0.45 of label radius).
+        let maxR = max(minR + 2.0, labelCircle.radius * 0.55)
         let steps = max(12, Int(maxR - minR))
         let angleSamples = 48
 
@@ -138,7 +139,7 @@ enum LabelProcessor {
         return max(1.0, radius)
     }
 
-    static func cutLabel(from image: UIImage, circle: DetectedCircle, holeRadius: CGFloat) -> UIImage? {
+    static func cutLabel(from image: UIImage, circle: DetectedCircle, holeCenter: CGPoint, holeRadius: CGFloat) -> UIImage? {
         let fixed = image.fixedOrientation()
         let size = fixed.size
         let bounds = CGRect(origin: .zero, size: size)
@@ -163,8 +164,8 @@ enum LabelProcessor {
             cg.addEllipse(in: outerRect)
             if holeRadius > 0 {
                 let innerRect = CGRect(
-                    x: circle.center.x - holeRadius,
-                    y: circle.center.y - holeRadius,
+                    x: holeCenter.x - holeRadius,
+                    y: holeCenter.y - holeRadius,
                     width: holeRadius * 2,
                     height: holeRadius * 2
                 )

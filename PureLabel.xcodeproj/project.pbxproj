@@ -23,7 +23,7 @@
 		B00000000000000000000005 /* ShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheet.swift; sourceTree = "<group>"; };
 		B00000000000000000000006 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B00000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		B00000000000000000000008 /* PureLabel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PureLabel.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000008 /* PureLabel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PureLabel.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -56,7 +56,7 @@
 				B00000000000000000000006 /* Assets.xcassets */,
 				B00000000000000000000007 /* Info.plist */,
 			);
-			path = "PureLabel";
+			path = PureLabel;
 			sourceTree = "<group>";
 		};
 		B00000000000000000000032 /* Products */ = {
@@ -82,8 +82,8 @@
 			);
 			dependencies = (
 			);
-			name = "PureLabel";
-			productName = "PureLabel";
+			name = PureLabel;
+			productName = PureLabel;
 			productReference = B00000000000000000000008 /* PureLabel.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -153,10 +153,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = SGFX8LC7PZ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "PureLabel/Info.plist";
+				INFOPLIST_FILE = PureLabel/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -179,10 +179,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = SGFX8LC7PZ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "PureLabel/Info.plist";
+				INFOPLIST_FILE = PureLabel/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
