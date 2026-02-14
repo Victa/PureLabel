@@ -1,6 +1,6 @@
 # PureLabel
 
-PureLabel is an iOS app built with SwiftUI that helps users capture and process label information from photos.
+PureLabel is an iOS app that lets users take a photo or upload an image of a record label, extract only the label, and export it with a transparent background for repurposing in design, video, and other creative workflows.
 
 ## Project Structure
 
