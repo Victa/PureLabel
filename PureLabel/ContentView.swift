@@ -30,10 +30,11 @@ struct ContentView: View {
 
     @State private var activePickerMode: PickerMode?
     @State private var activeScreen: WorkspaceScreen = .home
-    @State private var showSliders = true
     @State private var isSharing = false
     @State private var isProcessing = false
     @State private var shareFileURL: URL?
+    @State private var exportedTempURLs: [URL] = []
+    @State private var processingRequestID = UUID()
 
     @State private var centerX: CGFloat = 0.5
     @State private var centerY: CGFloat = 0.5
@@ -52,7 +53,6 @@ struct ContentView: View {
                 } else if activeScreen == .editor {
                     editorScreen(
                         topInset: proxy.safeAreaInsets.top,
-                        bottomInset: proxy.safeAreaInsets.bottom,
                         containerHeight: proxy.size.height
                     )
                 } else {
@@ -83,7 +83,9 @@ struct ContentView: View {
                 .id(mode.id)
             }
         }
-        .sheet(isPresented: $isSharing) {
+        .sheet(isPresented: $isSharing, onDismiss: {
+            cleanupExportedFiles()
+        }) {
             if let shareFileURL {
                 ShareSheet(items: [shareFileURL])
             }
@@ -141,18 +143,19 @@ struct ContentView: View {
         }
     }
 
-    private func editorScreen(topInset: CGFloat, bottomInset: CGFloat, containerHeight: CGFloat) -> some View {
-        let expandedImageHeight = max(300, containerHeight * 0.62)
-        let imageHeight = showSliders ? 220 : expandedImageHeight
+    private func editorScreen(topInset: CGFloat, containerHeight: CGFloat) -> some View {
+        let imageHeight = max(300, containerHeight * 0.62)
 
         return VStack(spacing: 0) {
             HStack {
                 Button {
+                    processingRequestID = UUID()
                     sourceImage = nil
                     detectedCircle = nil
                     cutImage = nil
                     pngData = nil
                     statusText = nil
+                    cleanupExportedFiles()
                     activeScreen = .home
                 } label: {
                     Image(systemName: "chevron.left")
@@ -164,15 +167,16 @@ struct ContentView: View {
 
                 Spacer()
 
-                Button("Save PNG") {
-                    saveToPhotos()
+                Button("OPEN PREVIEW") {
+                    applyCurrentCircle()
+                    activeScreen = .preview
                 }
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 13)
                 .background(Color.blue, in: Capsule())
-                .disabled(pngData == nil)
+                .disabled(sourceImage == nil)
             }
             .padding(.top, topInset + 8)
             .padding(.horizontal, 20)
@@ -182,16 +186,11 @@ struct ContentView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     imageArea(height: imageHeight)
-                    if showSliders {
-                        controlsArea
-                    }
+                    controlsArea
                 }
             }
-
-            editorTabBar(bottomInset: bottomInset)
         }
         .background(Color.black.ignoresSafeArea())
-        .animation(.easeInOut(duration: 0.2), value: showSliders)
     }
 
     private func previewScreen(topInset: CGFloat) -> some View {
@@ -352,17 +351,6 @@ struct ContentView: View {
                 .padding(.bottom, 14)
 
                 Divider()
-
-                Button("Rebuild PNG") {
-                    applyCurrentCircle()
-                }
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
-                .background(Color.blue, in: Capsule())
-                .padding(.top, 14)
-                .padding(.bottom, 16)
             }
             .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 28))
 
@@ -377,34 +365,6 @@ struct ContentView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
         .background(Color(.systemGray5))
-    }
-
-    private func editorTabBar(bottomInset: CGFloat) -> some View {
-        HStack(spacing: 12) {
-            Button(showSliders ? "Hide Sliders" : "Show Sliders") {
-                showSliders.toggle()
-            }
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-            .background(Color.white.opacity(0.18), in: Capsule())
-
-            Spacer()
-
-            Button("Open Preview") {
-                activeScreen = .preview
-            }
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-            .background(Color.blue, in: Capsule())
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
-        .padding(.bottom, max(10, bottomInset))
-        .background(Color.black)
     }
 
     private var outputArea: some View {
@@ -458,14 +418,17 @@ struct ContentView: View {
     private func processImage() {
         guard let sourceImage else { return }
 
+        let requestID = UUID()
+        processingRequestID = requestID
         isProcessing = true
         Task {
             let circle = LabelProcessor.detectCircle(in: sourceImage)
 
             await MainActor.run {
+                guard requestID == processingRequestID else { return }
                 isProcessing = false
                 guard let circle else {
-                    statusText = "No clear circle detected. Adjust sliders then rebuild."
+                    statusText = "No clear circle detected. Adjust sliders then open preview."
                     setDefaultCircle(using: sourceImage.size)
                     applyCurrentCircle()
                     return
@@ -600,11 +563,20 @@ struct ContentView: View {
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("purelabel-\(UUID().uuidString).png")
         do {
             try pngData.write(to: fileURL, options: .atomic)
+            exportedTempURLs.append(fileURL)
             return fileURL
         } catch {
             statusText = "Failed to prepare file for sharing."
             return nil
         }
+    }
+
+    private func cleanupExportedFiles() {
+        for url in exportedTempURLs {
+            try? FileManager.default.removeItem(at: url)
+        }
+        exportedTempURLs.removeAll()
+        shareFileURL = nil
     }
 
     private func aspectFitRect(for imageSize: CGSize, in containerSize: CGSize) -> CGRect {
