@@ -74,7 +74,10 @@ struct NativeCameraCaptureView: View {
                 CameraPreview(session: model.session)
                     .ignoresSafeArea()
 
-                CameraGuideOverlay(rollDegrees: levelMonitor.rollDegrees)
+                CameraGuideOverlay(
+                    rollDegrees: levelMonitor.rollDegrees,
+                    pitchDegrees: levelMonitor.pitchDegrees
+                )
                     .ignoresSafeArea()
             } else {
                 Color.black.ignoresSafeArea()
@@ -154,6 +157,7 @@ struct NativeCameraCaptureView: View {
 
 final class DeviceLevelMonitor: ObservableObject {
     @Published var rollDegrees: Double = 0
+    @Published var pitchDegrees: Double = 0
 
     private let motionManager = CMMotionManager()
     private var isRunning = false
@@ -164,7 +168,10 @@ final class DeviceLevelMonitor: ObservableObject {
         motionManager.deviceMotionUpdateInterval = 1.0 / 60.0
         motionManager.startDeviceMotionUpdates(using: .xArbitraryCorrectedZVertical, to: .main) { [weak self] motion, _ in
             guard let self, let motion else { return }
-            self.rollDegrees = motion.attitude.roll * 180.0 / .pi
+            let gravity = motion.gravity
+            // Gravity-based tilt reads intuitively in portrait for both axes.
+            self.rollDegrees = atan2(gravity.x, -gravity.y) * 180.0 / .pi
+            self.pitchDegrees = atan2(gravity.z, -gravity.y) * 180.0 / .pi
         }
     }
 
@@ -173,6 +180,7 @@ final class DeviceLevelMonitor: ObservableObject {
         motionManager.stopDeviceMotionUpdates()
         isRunning = false
         rollDegrees = 0
+        pitchDegrees = 0
     }
 }
 
@@ -204,7 +212,7 @@ private struct CameraCrosshairView: View {
     }
 }
 
-private struct CameraLevelIndicatorView: View {
+private struct CameraHorizontalLevelIndicatorView: View {
     let rollDegrees: Double
 
     private let segmentLength: CGFloat = 40
@@ -240,13 +248,51 @@ private struct CameraLevelIndicatorView: View {
     }
 }
 
+private struct CameraVerticalLevelIndicatorView: View {
+    let pitchDegrees: Double
+
+    private let segmentLength: CGFloat = 40
+    private let centerGap: CGFloat = 14
+    private let lineWidth: CGFloat = 2
+    private let levelThreshold: Double = 1.5
+    private let visibilityThreshold: Double = 15
+    private let sensitivity: CGFloat = 4.5
+
+    private var isNearLevel: Bool { abs(pitchDegrees) < levelThreshold }
+    private var isVisible: Bool { abs(pitchDegrees) < visibilityThreshold }
+
+    var body: some View {
+        if isVisible {
+            Canvas { context, size in
+                let centerX = size.width / 2
+                let centerY = size.height / 2
+                let offsetX = CGFloat(pitchDegrees) * sensitivity
+                let topX = isNearLevel ? centerX : centerX - offsetX
+                let bottomX = isNearLevel ? centerX : centerX + offsetX
+                let color: Color = isNearLevel ? .yellow : .white.opacity(0.85)
+
+                var path = Path()
+                path.move(to: CGPoint(x: topX, y: centerY - centerGap / 2 - segmentLength))
+                path.addLine(to: CGPoint(x: topX, y: centerY - centerGap / 2))
+                path.move(to: CGPoint(x: bottomX, y: centerY + centerGap / 2))
+                path.addLine(to: CGPoint(x: bottomX, y: centerY + centerGap / 2 + segmentLength))
+
+                context.stroke(path, with: .color(color), lineWidth: lineWidth)
+            }
+            .frame(width: 60, height: segmentLength * 2 + centerGap)
+        }
+    }
+}
+
 private struct CameraGuideOverlay: View {
     let rollDegrees: Double
+    let pitchDegrees: Double
 
     var body: some View {
         GeometryReader { _ in
             ZStack {
-                CameraLevelIndicatorView(rollDegrees: rollDegrees)
+                CameraHorizontalLevelIndicatorView(rollDegrees: rollDegrees)
+                CameraVerticalLevelIndicatorView(pitchDegrees: pitchDegrees)
                 CameraCrosshairView()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
