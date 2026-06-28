@@ -1,5 +1,4 @@
 import AVFoundation
-import CoreMotion
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -61,7 +60,6 @@ struct PhotoLibraryPicker: UIViewControllerRepresentable {
 
 struct NativeCameraCaptureView: View {
     @ObservedObject var model: CameraCaptureModel
-    @StateObject private var levelMonitor = DeviceLevelMonitor()
     let onImageCaptured: (UIImage) -> Void
     let onCancel: () -> Void
     var onReady: (() -> Void)?
@@ -74,10 +72,7 @@ struct NativeCameraCaptureView: View {
                 CameraPreview(session: model.session)
                     .ignoresSafeArea()
 
-                CameraGuideOverlay(
-                    rollDegrees: levelMonitor.rollDegrees,
-                    pitchDegrees: levelMonitor.pitchDegrees
-                )
+                CameraCrosshairOverlay()
                     .ignoresSafeArea()
             } else {
                 Color.black.ignoresSafeArea()
@@ -138,13 +133,11 @@ struct NativeCameraCaptureView: View {
         }
         .onAppear {
             model.onPhotoCaptured = onImageCaptured
-            levelMonitor.start()
             model.prepareSession(requestPermissionIfNeeded: true) {
                 onReady?()
             }
         }
         .onDisappear {
-            levelMonitor.stop()
             model.pauseSession()
         }
         .onChange(of: model.authorizationStatus) { status in
@@ -155,148 +148,30 @@ struct NativeCameraCaptureView: View {
     }
 }
 
-final class DeviceLevelMonitor: ObservableObject {
-    @Published var rollDegrees: Double = 0
-    @Published var pitchDegrees: Double = 0
-
-    private let motionManager = CMMotionManager()
-    private var isRunning = false
-
-    func start() {
-        guard !isRunning, motionManager.isDeviceMotionAvailable else { return }
-        isRunning = true
-        motionManager.deviceMotionUpdateInterval = 1.0 / 60.0
-        motionManager.startDeviceMotionUpdates(using: .xArbitraryCorrectedZVertical, to: .main) { [weak self] motion, _ in
-            guard let self, let motion else { return }
-            let gravity = motion.gravity
-            // Gravity-based tilt reads intuitively in portrait for both axes.
-            self.rollDegrees = atan2(gravity.x, -gravity.y) * 180.0 / .pi
-            self.pitchDegrees = atan2(gravity.z, -gravity.y) * 180.0 / .pi
-        }
-    }
-
-    func stop() {
-        guard isRunning else { return }
-        motionManager.stopDeviceMotionUpdates()
-        isRunning = false
-        rollDegrees = 0
-        pitchDegrees = 0
-    }
-}
-
-private struct CameraCrosshairView: View {
-    private let armLength: CGFloat = 14
+private struct CameraCrosshairOverlay: View {
+    private let armLength: CGFloat = 16
     private let gap: CGFloat = 6
-    private let lineWidth: CGFloat = 1.5
+    private let lineWidth: CGFloat = 2.5
 
     var body: some View {
         Canvas { context, size in
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let midX = size.width / 2
+            let midY = size.height / 2
             var path = Path()
 
-            path.move(to: CGPoint(x: center.x, y: center.y - gap / 2 - armLength))
-            path.addLine(to: CGPoint(x: center.x, y: center.y - gap / 2))
+            path.move(to: CGPoint(x: midX, y: midY - gap / 2 - armLength))
+            path.addLine(to: CGPoint(x: midX, y: midY - gap / 2))
+            path.move(to: CGPoint(x: midX, y: midY + gap / 2))
+            path.addLine(to: CGPoint(x: midX, y: midY + gap / 2 + armLength))
+            path.move(to: CGPoint(x: midX - gap / 2 - armLength, y: midY))
+            path.addLine(to: CGPoint(x: midX - gap / 2, y: midY))
+            path.move(to: CGPoint(x: midX + gap / 2, y: midY))
+            path.addLine(to: CGPoint(x: midX + gap / 2 + armLength, y: midY))
 
-            path.move(to: CGPoint(x: center.x, y: center.y + gap / 2))
-            path.addLine(to: CGPoint(x: center.x, y: center.y + gap / 2 + armLength))
-
-            path.move(to: CGPoint(x: center.x - gap / 2 - armLength, y: center.y))
-            path.addLine(to: CGPoint(x: center.x - gap / 2, y: center.y))
-
-            path.move(to: CGPoint(x: center.x + gap / 2, y: center.y))
-            path.addLine(to: CGPoint(x: center.x + gap / 2 + armLength, y: center.y))
-
-            context.stroke(path, with: .color(.white.opacity(0.7)), lineWidth: lineWidth)
+            context.stroke(path, with: .color(.black.opacity(0.6)), lineWidth: lineWidth + 2)
+            context.stroke(path, with: .color(.white.opacity(0.9)), lineWidth: lineWidth)
         }
-        .frame(width: armLength * 2 + gap + 4, height: armLength * 2 + gap + 4)
-    }
-}
-
-private struct CameraHorizontalLevelIndicatorView: View {
-    let rollDegrees: Double
-
-    private let segmentLength: CGFloat = 40
-    private let centerGap: CGFloat = 14
-    private let lineWidth: CGFloat = 2
-    private let levelThreshold: Double = 1.5
-    private let visibilityThreshold: Double = 15
-    private let sensitivity: CGFloat = 4.5
-
-    private var isNearLevel: Bool { abs(rollDegrees) < levelThreshold }
-    private var isVisible: Bool { abs(rollDegrees) < visibilityThreshold }
-
-    var body: some View {
-        if isVisible {
-            Canvas { context, size in
-                let centerY = size.height / 2
-                let offsetY = CGFloat(rollDegrees) * sensitivity
-                let leftY = isNearLevel ? centerY : centerY - offsetY
-                let rightY = isNearLevel ? centerY : centerY + offsetY
-                let color: Color = isNearLevel ? .yellow : .white.opacity(0.85)
-                let midX = size.width / 2
-
-                var path = Path()
-                path.move(to: CGPoint(x: midX - centerGap / 2 - segmentLength, y: leftY))
-                path.addLine(to: CGPoint(x: midX - centerGap / 2, y: leftY))
-                path.move(to: CGPoint(x: midX + centerGap / 2, y: rightY))
-                path.addLine(to: CGPoint(x: midX + centerGap / 2 + segmentLength, y: rightY))
-
-                context.stroke(path, with: .color(color), lineWidth: lineWidth)
-            }
-            .frame(width: segmentLength * 2 + centerGap, height: 60)
-        }
-    }
-}
-
-private struct CameraVerticalLevelIndicatorView: View {
-    let pitchDegrees: Double
-
-    private let segmentLength: CGFloat = 40
-    private let centerGap: CGFloat = 14
-    private let lineWidth: CGFloat = 2
-    private let levelThreshold: Double = 1.5
-    private let visibilityThreshold: Double = 15
-    private let sensitivity: CGFloat = 4.5
-
-    private var isNearLevel: Bool { abs(pitchDegrees) < levelThreshold }
-    private var isVisible: Bool { abs(pitchDegrees) < visibilityThreshold }
-
-    var body: some View {
-        if isVisible {
-            Canvas { context, size in
-                let centerX = size.width / 2
-                let centerY = size.height / 2
-                let offsetX = CGFloat(pitchDegrees) * sensitivity
-                let topX = isNearLevel ? centerX : centerX - offsetX
-                let bottomX = isNearLevel ? centerX : centerX + offsetX
-                let color: Color = isNearLevel ? .yellow : .white.opacity(0.85)
-
-                var path = Path()
-                path.move(to: CGPoint(x: topX, y: centerY - centerGap / 2 - segmentLength))
-                path.addLine(to: CGPoint(x: topX, y: centerY - centerGap / 2))
-                path.move(to: CGPoint(x: bottomX, y: centerY + centerGap / 2))
-                path.addLine(to: CGPoint(x: bottomX, y: centerY + centerGap / 2 + segmentLength))
-
-                context.stroke(path, with: .color(color), lineWidth: lineWidth)
-            }
-            .frame(width: 60, height: segmentLength * 2 + centerGap)
-        }
-    }
-}
-
-private struct CameraGuideOverlay: View {
-    let rollDegrees: Double
-    let pitchDegrees: Double
-
-    var body: some View {
-        GeometryReader { _ in
-            ZStack {
-                CameraHorizontalLevelIndicatorView(rollDegrees: rollDegrees)
-                CameraVerticalLevelIndicatorView(pitchDegrees: pitchDegrees)
-                CameraCrosshairView()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(false)
     }
 }
