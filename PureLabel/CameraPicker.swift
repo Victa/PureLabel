@@ -1,57 +1,70 @@
 import AVFoundation
+import CoreMotion
+import PhotosUI
 import SwiftUI
 import UIKit
 
-struct CameraPicker: UIViewControllerRepresentable {
-    let sourceType: UIImagePickerController.SourceType
+struct PhotoLibraryPicker: UIViewControllerRepresentable {
     let onImagePicked: (UIImage) -> Void
+    var onReady: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
 
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .images
+        configuration.selectionLimit = 1
+        let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = context.coordinator
-        picker.sourceType = sourceType
-        picker.allowsEditing = false
+        DispatchQueue.main.async {
+            onReady?()
+        }
         return picker
     }
 
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
-    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
-        private let parent: CameraPicker
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        private let parent: PhotoLibraryPicker
 
-        init(_ parent: CameraPicker) {
+        init(_ parent: PhotoLibraryPicker) {
             self.parent = parent
         }
 
-        func imagePickerController(
-            _ picker: UIImagePickerController,
-            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
-        ) {
-            guard let image = info[.originalImage] as? UIImage else {
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard let provider = results.first?.itemProvider,
+                  provider.canLoadObject(ofClass: UIImage.self) else {
                 parent.dismiss()
                 return
             }
-            parent.onImagePicked(image)
-            parent.dismiss()
-        }
 
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            parent.dismiss()
+            provider.loadObject(ofClass: UIImage.self) { object, _ in
+                guard let image = object as? UIImage else {
+                    DispatchQueue.main.async {
+                        self.parent.dismiss()
+                    }
+                    return
+                }
+
+                DispatchQueue.main.async {
+                    self.parent.onImagePicked(image)
+                    self.parent.dismiss()
+                }
+            }
         }
     }
 }
 
 struct NativeCameraCaptureView: View {
+    @ObservedObject var model: CameraCaptureModel
+    @StateObject private var levelMonitor = DeviceLevelMonitor()
     let onImageCaptured: (UIImage) -> Void
     let onCancel: () -> Void
-
-    @StateObject private var model = CameraCaptureModel()
+    var onReady: (() -> Void)?
 
     var body: some View {
         ZStack {
@@ -60,20 +73,27 @@ struct NativeCameraCaptureView: View {
             if model.authorizationStatus == .authorized {
                 CameraPreview(session: model.session)
                     .ignoresSafeArea()
+
+                CameraGuideOverlay(rollDegrees: levelMonitor.rollDegrees)
+                    .ignoresSafeArea()
             } else {
                 Color.black.ignoresSafeArea()
             }
 
             VStack {
                 HStack {
-                    Button("Cancel") {
+                    Button {
                         onCancel()
+                    } label: {
+                        Text("Cancel")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(Color.black.opacity(0.35), in: Capsule())
+                            .contentShape(Capsule())
                     }
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.35), in: Capsule())
+                    .buttonStyle(.plain)
 
                     Spacer()
                 }
@@ -94,6 +114,8 @@ struct NativeCameraCaptureView: View {
                                 .stroke(Color.black.opacity(0.85), lineWidth: 2)
                                 .frame(width: 62, height: 62)
                         }
+                        .frame(width: 74, height: 74)
+                        .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 34)
@@ -113,11 +135,123 @@ struct NativeCameraCaptureView: View {
         }
         .onAppear {
             model.onPhotoCaptured = onImageCaptured
-            model.prepareSession()
+            levelMonitor.start()
+            model.prepareSession(requestPermissionIfNeeded: true) {
+                onReady?()
+            }
         }
         .onDisappear {
-            model.stopSession()
+            levelMonitor.stop()
+            model.pauseSession()
         }
+        .onChange(of: model.authorizationStatus) { status in
+            if status == .authorized {
+                onReady?()
+            }
+        }
+    }
+}
+
+final class DeviceLevelMonitor: ObservableObject {
+    @Published var rollDegrees: Double = 0
+
+    private let motionManager = CMMotionManager()
+    private var isRunning = false
+
+    func start() {
+        guard !isRunning, motionManager.isDeviceMotionAvailable else { return }
+        isRunning = true
+        motionManager.deviceMotionUpdateInterval = 1.0 / 60.0
+        motionManager.startDeviceMotionUpdates(using: .xArbitraryCorrectedZVertical, to: .main) { [weak self] motion, _ in
+            guard let self, let motion else { return }
+            self.rollDegrees = motion.attitude.roll * 180.0 / .pi
+        }
+    }
+
+    func stop() {
+        guard isRunning else { return }
+        motionManager.stopDeviceMotionUpdates()
+        isRunning = false
+        rollDegrees = 0
+    }
+}
+
+private struct CameraCrosshairView: View {
+    private let armLength: CGFloat = 14
+    private let gap: CGFloat = 6
+    private let lineWidth: CGFloat = 1.5
+
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            var path = Path()
+
+            path.move(to: CGPoint(x: center.x, y: center.y - gap / 2 - armLength))
+            path.addLine(to: CGPoint(x: center.x, y: center.y - gap / 2))
+
+            path.move(to: CGPoint(x: center.x, y: center.y + gap / 2))
+            path.addLine(to: CGPoint(x: center.x, y: center.y + gap / 2 + armLength))
+
+            path.move(to: CGPoint(x: center.x - gap / 2 - armLength, y: center.y))
+            path.addLine(to: CGPoint(x: center.x - gap / 2, y: center.y))
+
+            path.move(to: CGPoint(x: center.x + gap / 2, y: center.y))
+            path.addLine(to: CGPoint(x: center.x + gap / 2 + armLength, y: center.y))
+
+            context.stroke(path, with: .color(.white.opacity(0.7)), lineWidth: lineWidth)
+        }
+        .frame(width: armLength * 2 + gap + 4, height: armLength * 2 + gap + 4)
+    }
+}
+
+private struct CameraLevelIndicatorView: View {
+    let rollDegrees: Double
+
+    private let segmentLength: CGFloat = 40
+    private let centerGap: CGFloat = 14
+    private let lineWidth: CGFloat = 2
+    private let levelThreshold: Double = 1.5
+    private let visibilityThreshold: Double = 15
+    private let sensitivity: CGFloat = 4.5
+
+    private var isNearLevel: Bool { abs(rollDegrees) < levelThreshold }
+    private var isVisible: Bool { abs(rollDegrees) < visibilityThreshold }
+
+    var body: some View {
+        if isVisible {
+            Canvas { context, size in
+                let centerY = size.height / 2
+                let offsetY = CGFloat(rollDegrees) * sensitivity
+                let leftY = isNearLevel ? centerY : centerY - offsetY
+                let rightY = isNearLevel ? centerY : centerY + offsetY
+                let color: Color = isNearLevel ? .yellow : .white.opacity(0.85)
+                let midX = size.width / 2
+
+                var path = Path()
+                path.move(to: CGPoint(x: midX - centerGap / 2 - segmentLength, y: leftY))
+                path.addLine(to: CGPoint(x: midX - centerGap / 2, y: leftY))
+                path.move(to: CGPoint(x: midX + centerGap / 2, y: rightY))
+                path.addLine(to: CGPoint(x: midX + centerGap / 2 + segmentLength, y: rightY))
+
+                context.stroke(path, with: .color(color), lineWidth: lineWidth)
+            }
+            .frame(width: segmentLength * 2 + centerGap, height: 60)
+        }
+    }
+}
+
+private struct CameraGuideOverlay: View {
+    let rollDegrees: Double
+
+    var body: some View {
+        GeometryReader { _ in
+            ZStack {
+                CameraLevelIndicatorView(rollDegrees: rollDegrees)
+                CameraCrosshairView()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -147,7 +281,9 @@ private final class PreviewView: UIView {
     }
 }
 
-private final class CameraCaptureModel: NSObject, ObservableObject {
+final class CameraCaptureModel: NSObject, ObservableObject {
+    static let shared = CameraCaptureModel()
+
     @Published var authorizationStatus: AVAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .video)
 
     let session = AVCaptureSession()
@@ -159,20 +295,35 @@ private final class CameraCaptureModel: NSObject, ObservableObject {
 
     var onPhotoCaptured: ((UIImage) -> Void)?
 
-    func prepareSession() {
+    func warmupIfAuthorized() {
+        let current = AVCaptureDevice.authorizationStatus(for: .video)
+        authorizationStatus = current
+        guard current == .authorized else { return }
+        configureAndStart()
+    }
+
+    func prepareSession(requestPermissionIfNeeded: Bool, onReady: (() -> Void)? = nil) {
         let current = AVCaptureDevice.authorizationStatus(for: .video)
         if current == .authorized {
             authorizationStatus = .authorized
-            configureAndStart()
+            configureAndStart {
+                DispatchQueue.main.async {
+                    onReady?()
+                }
+            }
             return
         }
 
-        if current == .notDetermined {
+        if current == .notDetermined, requestPermissionIfNeeded {
             AVCaptureDevice.requestAccess(for: .video) { granted in
                 DispatchQueue.main.async {
                     self.authorizationStatus = granted ? .authorized : .denied
                     if granted {
-                        self.configureAndStart()
+                        self.configureAndStart {
+                            DispatchQueue.main.async {
+                                onReady?()
+                            }
+                        }
                     }
                 }
             }
@@ -182,7 +333,7 @@ private final class CameraCaptureModel: NSObject, ObservableObject {
         authorizationStatus = current
     }
 
-    func stopSession() {
+    func pauseSession() {
         sessionQueue.async {
             guard self.isSessionRunning else { return }
             self.session.stopRunning()
@@ -198,14 +349,20 @@ private final class CameraCaptureModel: NSObject, ObservableObject {
         }
     }
 
-    private func configureAndStart() {
+    private func configureAndStart(completion: (() -> Void)? = nil) {
         sessionQueue.async {
             if !self.isConfigured {
                 self.configureSession()
             }
-            guard self.isConfigured, !self.isSessionRunning else { return }
-            self.session.startRunning()
-            self.isSessionRunning = true
+            guard self.isConfigured else {
+                completion?()
+                return
+            }
+            if !self.isSessionRunning {
+                self.session.startRunning()
+                self.isSessionRunning = true
+            }
+            completion?()
         }
     }
 

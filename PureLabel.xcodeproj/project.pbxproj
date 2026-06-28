@@ -13,6 +13,7 @@
 		B00000000000000000000013 /* LabelProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000004 /* LabelProcessor.swift */; };
 		B00000000000000000000014 /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000005 /* ShareSheet.swift */; };
 		B00000000000000000000015 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000006 /* Assets.xcassets */; };
+		B00000000000000000000016 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000009 /* SplashView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +25,7 @@
 		B00000000000000000000006 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B00000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B00000000000000000000008 /* PureLabel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PureLabel.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000009 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -53,6 +55,7 @@
 				B00000000000000000000003 /* CameraPicker.swift */,
 				B00000000000000000000004 /* LabelProcessor.swift */,
 				B00000000000000000000005 /* ShareSheet.swift */,
+				B00000000000000000000009 /* SplashView.swift */,
 				B00000000000000000000006 /* Assets.xcassets */,
 				B00000000000000000000007 /* Info.plist */,
 			);
@@ -141,6 +144,7 @@
 				B00000000000000000000012 /* CameraPicker.swift in Sources */,
 				B00000000000000000000013 /* LabelProcessor.swift in Sources */,
 				B00000000000000000000014 /* ShareSheet.swift in Sources */,
+				B00000000000000000000016 /* SplashView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

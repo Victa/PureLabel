@@ -1,3 +1,4 @@
+import AVFoundation
 import Photos
 import SwiftUI
 import UIKit
@@ -7,13 +8,6 @@ private enum PickerMode: String, Identifiable {
     case library
 
     var id: String { rawValue }
-
-    var sourceType: UIImagePickerController.SourceType {
-        switch self {
-        case .camera: return .camera
-        case .library: return .photoLibrary
-        }
-    }
 }
 
 private enum WorkspaceScreen {
@@ -23,6 +17,8 @@ private enum WorkspaceScreen {
 }
 
 struct ContentView: View {
+    @ObservedObject private var cameraService = CameraCaptureModel.shared
+
     @State private var sourceImage: UIImage?
     @State private var detectedCircle: DetectedCircle?
     @State private var cutImage: UIImage?
@@ -32,9 +28,11 @@ struct ContentView: View {
     @State private var activeScreen: WorkspaceScreen = .home
     @State private var isSharing = false
     @State private var isProcessing = false
+    @State private var isOpeningPicker = false
     @State private var shareFileURL: URL?
     @State private var exportedTempURLs: [URL] = []
     @State private var processingRequestID = UUID()
+    @State private var circleApplyTask: Task<Void, Never>?
 
     @State private var centerX: CGFloat = 0.5
     @State private var centerY: CGFloat = 0.5
@@ -60,26 +58,44 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(item: $activePickerMode) { mode in
+        .sheet(item: $activePickerMode, onDismiss: {
+            isOpeningPicker = false
+            if activeScreen == .home {
+                cameraService.warmupIfAuthorized()
+            }
+        }) { mode in
             switch mode {
             case .camera:
                 NativeCameraCaptureView(
+                    model: cameraService,
                     onImageCaptured: { image in
+                        isOpeningPicker = false
                         sourceImage = image
                         activeScreen = .editor
                         activePickerMode = nil
                         processImage()
                     },
                     onCancel: {
+                        isOpeningPicker = false
                         activePickerMode = nil
+                    },
+                    onReady: {
+                        isOpeningPicker = false
                     }
                 )
             case .library:
-                CameraPicker(sourceType: .photoLibrary) { image in
-                    sourceImage = image
-                    activeScreen = .editor
-                    processImage()
-                }
+                PhotoLibraryPicker(
+                    onImagePicked: { image in
+                        isOpeningPicker = false
+                        sourceImage = image
+                        activeScreen = .editor
+                        activePickerMode = nil
+                        processImage()
+                    },
+                    onReady: {
+                        isOpeningPicker = false
+                    }
+                )
                 .id(mode.id)
             }
         }
@@ -112,34 +128,49 @@ struct ContentView: View {
                 VStack(spacing: 16) {
                     Button {
                         statusText = nil
-                        activePickerMode = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .library
+                        isOpeningPicker = true
+                        activePickerMode = AVCaptureDevice.default(for: .video) != nil ? .camera : .library
                     } label: {
                         Text("Take Photo")
                             .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 17)
+                            .background(Color.blue, in: Capsule())
+                            .contentShape(Capsule())
+                            .shadow(color: Color.black.opacity(0.15), radius: 6, x: 0, y: 3)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    .background(Color.blue, in: Capsule())
-                    .shadow(color: Color.black.opacity(0.15), radius: 6, x: 0, y: 3)
 
                     Button {
                         statusText = nil
+                        isOpeningPicker = true
                         activePickerMode = .library
                     } label: {
                         Text("Choose from Gallery")
                             .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(Color.black.opacity(0.75))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 17)
+                            .background(Color(.systemGray6), in: Capsule())
+                            .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(Color.black.opacity(0.75))
-                    .background(Color(.systemGray6), in: Capsule())
                 }
                 .padding(.horizontal, 28)
                 .padding(.bottom, max(20, topInset))
             }
+
+            if isOpeningPicker {
+                Color.black.opacity(0.2)
+                    .ignoresSafeArea()
+                ProgressView()
+                    .controlSize(.large)
+            }
+        }
+        .onAppear {
+            cameraService.warmupIfAuthorized()
+            LabelProcessor.warmup()
         }
     }
 
@@ -150,6 +181,7 @@ struct ContentView: View {
             HStack {
                 Button {
                     processingRequestID = UUID()
+                    circleApplyTask?.cancel()
                     sourceImage = nil
                     detectedCircle = nil
                     cutImage = nil
@@ -157,25 +189,34 @@ struct ContentView: View {
                     statusText = nil
                     cleanupExportedFiles()
                     activeScreen = .home
+                    cameraService.warmupIfAuthorized()
                 } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(Color.black.opacity(0.7))
                         .frame(width: 58, height: 58)
                         .background(Color(.systemGray6), in: Circle())
+                        .contentShape(Circle())
                 }
+                .buttonStyle(.plain)
 
                 Spacer()
 
-                Button("OPEN PREVIEW") {
-                    applyCurrentCircle()
-                    activeScreen = .preview
+                Button {
+                    Task {
+                        await applyCurrentCircleImmediately()
+                        activeScreen = .preview
+                    }
+                } label: {
+                    Text("OPEN PREVIEW")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 13)
+                        .background(Color.blue, in: Capsule())
+                        .contentShape(Capsule())
                 }
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 13)
-                .background(Color.blue, in: Capsule())
+                .buttonStyle(.plain)
                 .disabled(sourceImage == nil)
             }
             .padding(.top, topInset + 8)
@@ -204,31 +245,41 @@ struct ContentView: View {
                         .foregroundStyle(Color.black.opacity(0.7))
                         .frame(width: 58, height: 58)
                         .background(Color(.systemGray6), in: Circle())
+                        .contentShape(Circle())
                 }
+                .buttonStyle(.plain)
 
                 Spacer()
 
                 HStack(spacing: 10) {
-                    Button("Save PNG") {
+                    Button {
                         saveToPhotos()
+                    } label: {
+                        Text("Save PNG")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 11)
+                            .background(Color.blue, in: Capsule())
+                            .contentShape(Capsule())
                     }
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 11)
-                    .background(Color.blue, in: Capsule())
+                    .buttonStyle(.plain)
                     .disabled(pngData == nil)
 
-                    Button("Share") {
+                    Button {
                         guard let fileURL = exportedFileURL() else { return }
                         shareFileURL = fileURL
                         isSharing = true
+                    } label: {
+                        Text("Share")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 11)
+                            .background(Color.black.opacity(0.3), in: Capsule())
+                            .contentShape(Capsule())
                     }
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 11)
-                    .background(Color.black.opacity(0.3), in: Capsule())
+                    .buttonStyle(.plain)
                     .disabled(pngData == nil)
                 }
             }
@@ -274,7 +325,7 @@ struct ContentView: View {
                             )
 
                         Circle()
-                            .stroke(Color.orange, lineWidth: 2)
+                            .stroke(Color.orange, lineWidth: holeRadiusToLabelRatio > 0.15 ? 3 : 2)
                             .frame(width: holeDisplayDiameter, height: holeDisplayDiameter)
                             .position(holeDisplayCenter)
 
@@ -295,10 +346,12 @@ struct ContentView: View {
                                             imageSize: image.size,
                                             circle: overlayCircle
                                         )
-                                        applyCurrentCircle()
+                                        scheduleApplyCurrentCircle()
                                     }
                                     .onEnded { _ in
-                                        applyCurrentCircle()
+                                        Task {
+                                            await applyCurrentCircleImmediately()
+                                        }
                                     }
                             )
                     }
@@ -333,11 +386,19 @@ struct ContentView: View {
                 Divider()
 
                 HStack(spacing: 18) {
-                    sliderCell(title: "Radius", value: $radiusRatio, range: 0.1...0.5)
+                    sliderCell(title: "Radius", value: $radiusRatio, range: 0.1...0.6)
                     sliderCell(title: "Center Hole", value: $holeRadiusToLabelRatio, range: 0...0.55)
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 14)
+                .padding(.bottom, 8)
+
+                Button("Re-detect Hole") {
+                    redetectCenterHole()
+                }
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.blue)
+                .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.bottom, 14)
 
                 Divider()
@@ -365,6 +426,12 @@ struct ContentView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
         .background(Color(.systemGray5))
+        .onChange(of: centerX) { _ in scheduleApplyCurrentCircle() }
+        .onChange(of: centerY) { _ in scheduleApplyCurrentCircle() }
+        .onChange(of: radiusRatio) { _ in scheduleApplyCurrentCircle() }
+        .onChange(of: holeRadiusToLabelRatio) { _ in scheduleApplyCurrentCircle() }
+        .onChange(of: holeOffsetXRatio) { _ in scheduleApplyCurrentCircle() }
+        .onChange(of: holeOffsetYRatio) { _ in scheduleApplyCurrentCircle() }
     }
 
     private var outputArea: some View {
@@ -415,36 +482,102 @@ struct ContentView: View {
         }
     }
 
+    private func redetectCenterHole() {
+        guard let sourceImage, let circle = workingCircle(for: sourceImage.size) else { return }
+
+        Task {
+            let image = sourceImage
+            let labelCircle = circle
+            let detectedHole = LabelProcessor.detectCenterHole(in: image, labelCircle: labelCircle)
+
+            await MainActor.run {
+                guard let hole = detectedHole else {
+                    statusText = "Could not detect hole. Adjust Center Hole manually."
+                    return
+                }
+
+                holeRadiusToLabelRatio = min(max(hole.radius / labelCircle.radius, 0), 0.55)
+                holeOffsetXRatio = (hole.center.x - labelCircle.center.x) / labelCircle.radius
+                holeOffsetYRatio = (hole.center.y - labelCircle.center.y) / labelCircle.radius
+
+                let isWideHole = holeRadiusToLabelRatio >= 0.18
+                statusText = isWideHole
+                    ? "Wide center hole detected."
+                    : "Spindle hole detected."
+            }
+
+            await applyCurrentCircleImmediately()
+        }
+    }
+
     private func processImage() {
         guard let sourceImage else { return }
 
         let requestID = UUID()
         processingRequestID = requestID
         isProcessing = true
-        Task {
-            let circle = LabelProcessor.detectCircle(in: sourceImage)
+        let image = sourceImage
 
+        Task {
+            let circle = LabelProcessor.detectCircle(in: image)
+            let detectedHole = circle.flatMap { LabelProcessor.detectCenterHole(in: image, labelCircle: $0) }
+
+            let holeRadiusRatio: CGFloat
+            let holeOffsetX: CGFloat
+            let holeOffsetY: CGFloat
+            if let circle, let hole = detectedHole {
+                holeRadiusRatio = min(max(hole.radius / circle.radius, 0), 0.55)
+                holeOffsetX = (hole.center.x - circle.center.x) / circle.radius
+                holeOffsetY = (hole.center.y - circle.center.y) / circle.radius
+            } else {
+                holeRadiusRatio = 0.07
+                holeOffsetX = 0
+                holeOffsetY = 0
+            }
+
+            let defaultCircle = DetectedCircle(
+                center: CGPoint(x: image.size.width * 0.5, y: image.size.height * 0.5),
+                radius: min(image.size.width, image.size.height) * 0.35
+            )
+            let resolvedCircle = circle ?? defaultCircle
+            let holeCenter = CGPoint(
+                x: resolvedCircle.center.x + holeOffsetX * resolvedCircle.radius,
+                y: resolvedCircle.center.y + holeOffsetY * resolvedCircle.radius
+            )
+            let output = LabelProcessor.processLabel(
+                from: image,
+                circle: resolvedCircle,
+                holeCenter: holeCenter,
+                holeRadius: max(0, holeRadiusRatio * resolvedCircle.radius)
+            )
+
+            let detected = circle
             await MainActor.run {
                 guard requestID == processingRequestID else { return }
                 isProcessing = false
-                guard let circle else {
+
+                guard let detected else {
                     statusText = "No clear circle detected. Adjust sliders then open preview."
-                    setDefaultCircle(using: sourceImage.size)
-                    applyCurrentCircle()
+                    setDefaultCircle(using: image.size)
                     return
                 }
 
-                detectedCircle = circle
-                syncSliders(with: circle, imageSize: sourceImage.size)
-                if let holeRadius = LabelProcessor.detectCenterHoleRadius(in: sourceImage, labelCircle: circle) {
-                    holeRadiusToLabelRatio = min(max(holeRadius / circle.radius, 0), 0.55)
-                } else {
-                    holeRadiusToLabelRatio = 0.07
-                }
-                holeOffsetXRatio = 0
-                holeOffsetYRatio = 0
-                applyCurrentCircle()
-                statusText = "Circle detected and PNG generated."
+                detectedCircle = detected
+                syncSliders(with: detected, imageSize: image.size)
+                holeRadiusToLabelRatio = holeRadiusRatio
+                holeOffsetXRatio = holeOffsetX
+                holeOffsetYRatio = holeOffsetY
+                cutImage = output.cutImage
+                pngData = output.pngData
+                statusText = detectedHole == nil
+                    ? "Circle detected. Adjust center hole if needed."
+                    : (holeRadiusRatio >= 0.18
+                        ? "Circle detected. Wide center hole (7-inch style)."
+                        : "Circle detected and PNG generated.")
+            }
+
+            if detected == nil {
+                await applyCurrentCircleImmediately()
             }
         }
     }
@@ -471,22 +604,56 @@ struct ContentView: View {
         return DetectedCircle(center: center, radius: radius)
     }
 
-    private func applyCurrentCircle() {
+    private func applyCurrentCircleImmediately() async {
+        circleApplyTask?.cancel()
         guard let sourceImage, let circle = workingCircle(for: sourceImage.size) else { return }
-        detectedCircle = circle
-        let processedImage = LabelProcessor.cutLabel(
-            from: sourceImage,
-            circle: circle,
-            holeCenter: workingHoleCenter(for: circle),
-            holeRadius: workingHoleRadius(for: circle)
-        )
-        cutImage = processedImage
 
-        if let processedImage {
-            let exportImage = cropOutputImage(processedImage, circle: circle)
-            pngData = exportImage.pngData()
-        } else {
-            pngData = nil
+        let image = sourceImage
+        let holeCenter = workingHoleCenter(for: circle)
+        let holeRadius = workingHoleRadius(for: circle)
+
+        let output = await Task.detached(priority: .userInitiated) {
+            LabelProcessor.processLabel(
+                from: image,
+                circle: circle,
+                holeCenter: holeCenter,
+                holeRadius: holeRadius
+            )
+        }.value
+
+        detectedCircle = circle
+        cutImage = output.cutImage
+        pngData = output.pngData
+    }
+
+    private func scheduleApplyCurrentCircle() {
+        circleApplyTask?.cancel()
+        guard let sourceImage else { return }
+
+        let image = sourceImage
+        let circle = workingCircle(for: image.size)
+        let holeCenter = circle.map { workingHoleCenter(for: $0) }
+        let holeRadius = circle.map { workingHoleRadius(for: $0) }
+
+        circleApplyTask = Task {
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled, let circle, let holeCenter, let holeRadius else { return }
+
+            let output = await Task.detached(priority: .userInitiated) {
+                LabelProcessor.processLabel(
+                    from: image,
+                    circle: circle,
+                    holeCenter: holeCenter,
+                    holeRadius: holeRadius
+                )
+            }.value
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                detectedCircle = circle
+                cutImage = output.cutImage
+                pngData = output.pngData
+            }
         }
     }
 
