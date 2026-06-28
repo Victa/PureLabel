@@ -38,13 +38,11 @@ struct ContentView: View {
 
     @State private var activePickerMode: PickerMode?
     @State private var activeScreen: WorkspaceScreen = .home
-    @State private var isSharing = false
     @State private var isProcessing = false
     @State private var isOpeningPicker = false
-    @State private var shareFileURL: URL?
-    @State private var exportedTempURLs: [URL] = []
     @State private var processingRequestID = UUID()
     @State private var circleApplyTask: Task<Void, Never>?
+    @State private var saveFeedbackMessage: String?
 
     @State private var centerX: CGFloat = 0.5
     @State private var centerY: CGFloat = 0.5
@@ -53,7 +51,6 @@ struct ContentView: View {
     @State private var holeOffsetXRatio: CGFloat = 0
     @State private var holeOffsetYRatio: CGFloat = 0
 
-    @State private var statusText: String?
     @State private var activeTab: EditorTab = .label
 
     @Namespace private var editorTabNamespace
@@ -116,13 +113,6 @@ struct ContentView: View {
                 .id(mode.id)
             }
         }
-        .sheet(isPresented: $isSharing, onDismiss: {
-            cleanupExportedFiles()
-        }) {
-            if let shareFileURL {
-                ShareSheet(items: [shareFileURL])
-            }
-        }
     }
 
     private func homeScreen(topInset: CGFloat) -> some View {
@@ -144,7 +134,6 @@ struct ContentView: View {
 
                 VStack(spacing: 16) {
                     Button {
-                        statusText = nil
                         isOpeningPicker = true
                         activePickerMode = AVCaptureDevice.default(for: .video) != nil ? .camera : .library
                     } label: {
@@ -160,7 +149,6 @@ struct ContentView: View {
                     .buttonStyle(.plain)
 
                     Button {
-                        statusText = nil
                         isOpeningPicker = true
                         activePickerMode = .library
                     } label: {
@@ -195,7 +183,7 @@ struct ContentView: View {
         let previewMaxHeight = containerHeight * 0.46
 
         return VStack(spacing: 0) {
-            HStack {
+            workspaceNavBar(topInset: topInset) {
                 Button {
                     processingRequestID = UUID()
                     circleApplyTask?.cancel()
@@ -203,22 +191,13 @@ struct ContentView: View {
                     detectedCircle = nil
                     cutImage = nil
                     pngData = nil
-                    statusText = nil
-                    cleanupExportedFiles()
                     activeScreen = .home
                     cameraService.warmupIfAuthorized()
                 } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Color.black.opacity(0.7))
-                        .frame(width: 58, height: 58)
-                        .background(Color(.systemGray6), in: Circle())
-                        .contentShape(Circle())
+                    navBackButton
                 }
                 .buttonStyle(.plain)
-
-                Spacer()
-
+            } trailing: {
                 Button {
                     Task {
                         await applyCurrentCircleImmediately()
@@ -226,23 +205,18 @@ struct ContentView: View {
                     }
                 } label: {
                     Text("OPEN PREVIEW")
-                        .font(.system(size: 18, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 13)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 9)
                         .background(Color.blue, in: Capsule())
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(sourceImage == nil)
             }
-            .padding(.top, topInset + 8)
-            .padding(.horizontal, 20)
-            .padding(.bottom, 14)
-            .background(Color(.systemGray5))
 
             imageArea(maxHeight: previewMaxHeight)
-            statusChipView
             editorTabControl
 
             ScrollView(showsIndicators: false) {
@@ -257,61 +231,67 @@ struct ContentView: View {
 
     private func previewScreen(topInset: CGFloat) -> some View {
         VStack(spacing: 0) {
-            HStack {
+            workspaceNavBar(topInset: topInset) {
                 Button {
+                    saveFeedbackMessage = nil
                     activeScreen = .editor
                 } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Color.black.opacity(0.7))
-                        .frame(width: 58, height: 58)
-                        .background(Color(.systemGray6), in: Circle())
-                        .contentShape(Circle())
+                    navBackButton
                 }
                 .buttonStyle(.plain)
-
-                Spacer()
-
-                HStack(spacing: 10) {
-                    Button {
-                        saveToPhotos()
-                    } label: {
-                        Text("Save PNG")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 11)
-                            .background(Color.blue, in: Capsule())
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(pngData == nil)
-
-                    Button {
-                        guard let fileURL = exportedFileURL() else { return }
-                        shareFileURL = fileURL
-                        isSharing = true
-                    } label: {
-                        Text("Share")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 11)
-                            .background(Color.black.opacity(0.3), in: Capsule())
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(pngData == nil)
+            } trailing: {
+                Button {
+                    saveToPhotos()
+                } label: {
+                    Text("SAVE PNG")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 9)
+                        .background(Color.blue, in: Capsule())
+                        .contentShape(Capsule())
                 }
+                .buttonStyle(.plain)
+                .disabled(pngData == nil)
             }
-            .padding(.top, topInset + 8)
-            .padding(.horizontal, 20)
-            .padding(.bottom, 14)
-            .background(Color(.systemGray5))
+
+            if let saveFeedbackMessage {
+                Text(saveFeedbackMessage)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color.black.opacity(0.65))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(Color(.systemGray5))
+            }
 
             outputArea
         }
         .background(Color.black.ignoresSafeArea())
+    }
+
+    private var navBackButton: some View {
+        Image(systemName: "chevron.left")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(Color.black.opacity(0.7))
+            .frame(width: 40, height: 40)
+            .background(Color(.systemGray6), in: Circle())
+            .contentShape(Circle())
+    }
+
+    private func workspaceNavBar<Leading: View, Trailing: View>(
+        topInset: CGFloat,
+        @ViewBuilder leading: () -> Leading,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack {
+            leading()
+            Spacer()
+            trailing()
+        }
+        .padding(.top, topInset + 4)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+        .background(Color(.systemGray5))
     }
 
     private func imageArea(maxHeight: CGFloat) -> some View {
@@ -393,25 +373,6 @@ struct ContentView: View {
         .aspectRatio(1, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .frame(maxHeight: maxHeight)
-    }
-
-    @ViewBuilder
-    private var statusChipView: some View {
-        Group {
-            if let statusText {
-                Text(statusText)
-                    .font(.footnote)
-                    .foregroundStyle(Color.black.opacity(0.55))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
-                    .background(Color(.systemGray6), in: Capsule())
-                    .padding(.horizontal, 20)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(Color(.systemGray5))
     }
 
     private var editorTabControl: some View {
@@ -586,19 +547,11 @@ struct ContentView: View {
             let detectedHole = LabelProcessor.detectCenterHole(in: image, labelCircle: labelCircle)
 
             await MainActor.run {
-                guard let hole = detectedHole else {
-                    statusText = "Could not detect hole. Adjust Center Hole manually."
-                    return
-                }
+                guard let hole = detectedHole else { return }
 
                 holeRadiusToLabelRatio = min(max(hole.radius / labelCircle.radius, 0), 0.55)
                 holeOffsetXRatio = (hole.center.x - labelCircle.center.x) / labelCircle.radius
                 holeOffsetYRatio = (hole.center.y - labelCircle.center.y) / labelCircle.radius
-
-                let isWideHole = holeRadiusToLabelRatio >= 0.18
-                statusText = isWideHole
-                    ? "Wide center hole detected."
-                    : "Spindle hole detected."
             }
 
             await applyCurrentCircleImmediately()
@@ -653,7 +606,6 @@ struct ContentView: View {
                 isProcessing = false
 
                 guard let detected else {
-                    statusText = "No clear circle detected. Adjust sliders then open preview."
                     setDefaultCircle(using: image.size)
                     return
                 }
@@ -665,11 +617,6 @@ struct ContentView: View {
                 holeOffsetYRatio = holeOffsetY
                 cutImage = output.cutImage
                 pngData = output.pngData
-                statusText = detectedHole == nil
-                    ? "Circle detected. Adjust center hole if needed."
-                    : (holeRadiusRatio >= 0.18
-                        ? "Circle detected. Wide center hole (7-inch style)."
-                        : "Circle detected and PNG generated.")
             }
 
             if detected == nil {
@@ -784,7 +731,7 @@ struct ContentView: View {
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
             guard status == .authorized || status == .limited else {
                 DispatchQueue.main.async {
-                    statusText = "Photos permission denied."
+                    saveFeedbackMessage = "Photos permission denied."
                 }
                 return
             }
@@ -793,7 +740,7 @@ struct ContentView: View {
                 PHAssetChangeRequest.creationRequestForAsset(from: image)
             } completionHandler: { success, _ in
                 DispatchQueue.main.async {
-                    statusText = success ? "Saved to Photos." : "Failed to save image."
+                    saveFeedbackMessage = success ? "Saved" : "Failed to save."
                 }
             }
         }
@@ -819,27 +766,6 @@ struct ContentView: View {
         rect = rect.intersection(maxRect)
         guard let cropped = cgImage.cropping(to: rect) else { return image }
         return UIImage(cgImage: cropped, scale: image.scale, orientation: .up)
-    }
-
-    private func exportedFileURL() -> URL? {
-        guard let pngData else { return nil }
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("purelabel-\(UUID().uuidString).png")
-        do {
-            try pngData.write(to: fileURL, options: .atomic)
-            exportedTempURLs.append(fileURL)
-            return fileURL
-        } catch {
-            statusText = "Failed to prepare file for sharing."
-            return nil
-        }
-    }
-
-    private func cleanupExportedFiles() {
-        for url in exportedTempURLs {
-            try? FileManager.default.removeItem(at: url)
-        }
-        exportedTempURLs.removeAll()
-        shareFileURL = nil
     }
 
     private func aspectFitRect(for imageSize: CGSize, in containerSize: CGSize) -> CGRect {

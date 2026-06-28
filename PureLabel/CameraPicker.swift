@@ -65,69 +65,78 @@ struct NativeCameraCaptureView: View {
     var onReady: (() -> Void)?
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        GeometryReader { geo in
+            let squareSide = geo.size.width
 
-            if model.authorizationStatus == .authorized {
-                CameraPreview(session: model.session)
-                    .ignoresSafeArea()
-
-                CameraCrosshairOverlay()
-                    .ignoresSafeArea()
-            } else {
+            ZStack {
                 Color.black.ignoresSafeArea()
-            }
 
-            VStack {
-                HStack {
-                    Button {
-                        onCancel()
-                    } label: {
-                        Text("Cancel")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(Color.black.opacity(0.35), in: Capsule())
-                            .contentShape(Capsule())
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+
+                    ZStack {
+                        if model.authorizationStatus == .authorized {
+                            CameraPreview(session: model.session)
+                            CameraCrosshairOverlay()
+                        }
                     }
-                    .buttonStyle(.plain)
+                    .frame(width: squareSide, height: squareSide)
+                    .clipped()
+
+                    Spacer(minLength: 0)
+                }
+
+                VStack {
+                    HStack {
+                        Button {
+                            onCancel()
+                        } label: {
+                            Text("Cancel")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(Color.black.opacity(0.35), in: Capsule())
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
 
                     Spacer()
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 12)
 
-                Spacer()
-
-                if model.authorizationStatus == .authorized {
-                    Button {
-                        model.capturePhoto()
-                    } label: {
-                        ZStack {
-                            Circle()
-                                .fill(Color.white)
-                                .frame(width: 74, height: 74)
-                            Circle()
-                                .stroke(Color.black.opacity(0.85), lineWidth: 2)
-                                .frame(width: 62, height: 62)
+                    if model.authorizationStatus == .authorized {
+                        Button {
+                            model.capturePhoto()
+                        } label: {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.white)
+                                    .frame(width: 74, height: 74)
+                                Circle()
+                                    .stroke(Color.black.opacity(0.85), lineWidth: 2)
+                                    .frame(width: 62, height: 62)
+                            }
+                            .frame(width: 74, height: 74)
+                            .contentShape(Circle())
                         }
-                        .frame(width: 74, height: 74)
-                        .contentShape(Circle())
+                        .buttonStyle(.plain)
+                        .padding(.bottom, 34)
+                    } else if model.authorizationStatus == .denied || model.authorizationStatus == .restricted {
+                        Text("Camera access is required. Enable it in Settings.")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 42)
+                    } else {
+                        ProgressView()
+                            .tint(.white)
+                            .padding(.bottom, 42)
                     }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 34)
-                } else if model.authorizationStatus == .denied || model.authorizationStatus == .restricted {
-                    Text("Camera access is required. Enable it in Settings.")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 42)
-                } else {
-                    ProgressView()
-                        .tint(.white)
-                        .padding(.bottom, 42)
                 }
             }
         }
@@ -320,8 +329,23 @@ extension CameraCaptureModel: AVCapturePhotoCaptureDelegate {
             return
         }
 
+        let squareImage = Self.squareCenterCropped(image)
         DispatchQueue.main.async {
-            self.onPhotoCaptured?(image)
+            self.onPhotoCaptured?(squareImage)
+        }
+    }
+
+    private static func squareCenterCropped(_ image: UIImage) -> UIImage {
+        let size = image.size
+        let side = min(size.width, size.height)
+        guard side > 0 else { return image }
+
+        let origin = CGPoint(x: (size.width - side) / 2, y: (size.height - side) / 2)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
+        return renderer.image { _ in
+            image.draw(at: CGPoint(x: -origin.x, y: -origin.y))
         }
     }
 }
