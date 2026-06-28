@@ -16,6 +16,18 @@ private enum WorkspaceScreen {
     case preview
 }
 
+private enum EditorTab: String, CaseIterable, Hashable {
+    case label = "Label"
+    case hole = "Center hole"
+
+    var dotColor: Color {
+        switch self {
+        case .label: Color.yellow
+        case .hole: Color.orange
+        }
+    }
+}
+
 struct ContentView: View {
     @ObservedObject private var cameraService = CameraCaptureModel.shared
 
@@ -42,6 +54,9 @@ struct ContentView: View {
     @State private var holeOffsetYRatio: CGFloat = 0
 
     @State private var statusText: String?
+    @State private var activeTab: EditorTab = .label
+
+    @Namespace private var editorTabNamespace
 
     var body: some View {
         GeometryReader { proxy in
@@ -70,6 +85,7 @@ struct ContentView: View {
                     model: cameraService,
                     onImageCaptured: { image in
                         isOpeningPicker = false
+                        activeTab = .label
                         sourceImage = image
                         activeScreen = .editor
                         activePickerMode = nil
@@ -87,6 +103,7 @@ struct ContentView: View {
                 PhotoLibraryPicker(
                     onImagePicked: { image in
                         isOpeningPicker = false
+                        activeTab = .label
                         sourceImage = image
                         activeScreen = .editor
                         activePickerMode = nil
@@ -175,7 +192,7 @@ struct ContentView: View {
     }
 
     private func editorScreen(topInset: CGFloat, containerHeight: CGFloat) -> some View {
-        let imageHeight = max(300, containerHeight * 0.62)
+        let previewMaxHeight = containerHeight * 0.46
 
         return VStack(spacing: 0) {
             HStack {
@@ -224,12 +241,16 @@ struct ContentView: View {
             .padding(.bottom, 14)
             .background(Color(.systemGray5))
 
+            imageArea(maxHeight: previewMaxHeight)
+            statusChipView
+            editorTabControl
+
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 0) {
-                    imageArea(height: imageHeight)
-                    controlsArea
-                }
+                sliderPanel(for: activeTab)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
             }
+            .background(Color(.systemGray5))
         }
         .background(Color.black.ignoresSafeArea())
     }
@@ -293,7 +314,7 @@ struct ContentView: View {
         .background(Color.black.ignoresSafeArea())
     }
 
-    private func imageArea(height: CGFloat) -> some View {
+    private func imageArea(maxHeight: CGFloat) -> some View {
         ZStack {
             Color.black
 
@@ -369,69 +390,143 @@ struct ContentView: View {
                     .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
             }
         }
-        .frame(height: height)
+        .aspectRatio(1, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+        .frame(maxHeight: maxHeight)
     }
 
-    private var controlsArea: some View {
-        VStack(spacing: 14) {
-            VStack(spacing: 0) {
-                HStack(spacing: 18) {
-                    sliderCell(title: "Center X", value: $centerX, range: 0...1)
-                    sliderCell(title: "Center Y", value: $centerY, range: 0...1)
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 18)
-                .padding(.bottom, 14)
-
-                Divider()
-
-                HStack(spacing: 18) {
-                    sliderCell(title: "Radius", value: $radiusRatio, range: 0.1...0.6)
-                    sliderCell(title: "Center Hole", value: $holeRadiusToLabelRatio, range: 0...0.55)
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 14)
-                .padding(.bottom, 8)
-
-                Button("Re-detect Hole") {
-                    redetectCenterHole()
-                }
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Color.blue)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.bottom, 14)
-
-                Divider()
-
-                HStack(spacing: 18) {
-                    sliderCell(title: "Hole X", value: $holeOffsetXRatio, range: -0.2...0.2)
-                    sliderCell(title: "Hole Y", value: $holeOffsetYRatio, range: -0.2...0.2)
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 14)
-                .padding(.bottom, 14)
-
-                Divider()
-            }
-            .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 28))
-
+    @ViewBuilder
+    private var statusChipView: some View {
+        Group {
             if let statusText {
                 Text(statusText)
                     .font(.footnote)
                     .foregroundStyle(Color.black.opacity(0.55))
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .background(Color(.systemGray6), in: Capsule())
+                    .padding(.horizontal, 20)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
         .background(Color(.systemGray5))
+    }
+
+    private var editorTabControl: some View {
+        HStack(spacing: 4) {
+            ForEach(EditorTab.allCases, id: \.self) { tab in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        activeTab = tab
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(tab.dotColor)
+                            .frame(width: 8, height: 8)
+                        Text(tab.rawValue)
+                            .font(.system(size: 14, weight: .medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .foregroundStyle(activeTab == tab ? Color.black.opacity(0.92) : Color.black.opacity(0.55))
+                    .background {
+                        if activeTab == tab {
+                            Capsule()
+                                .fill(Color.white)
+                                .matchedGeometryEffect(id: "editorTabPill", in: editorTabNamespace)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(Color(.systemGray4).opacity(0.45), in: Capsule())
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
+        .background(Color(.systemGray5))
+    }
+
+    @ViewBuilder
+    private func sliderPanel(for tab: EditorTab) -> some View {
+        Group {
+            switch tab {
+            case .label:
+                labelSliderPanel
+            case .hole:
+                holeSliderPanel
+            }
+        }
+        .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 28))
         .onChange(of: centerX) { _ in scheduleApplyCurrentCircle() }
         .onChange(of: centerY) { _ in scheduleApplyCurrentCircle() }
         .onChange(of: radiusRatio) { _ in scheduleApplyCurrentCircle() }
         .onChange(of: holeRadiusToLabelRatio) { _ in scheduleApplyCurrentCircle() }
         .onChange(of: holeOffsetXRatio) { _ in scheduleApplyCurrentCircle() }
         .onChange(of: holeOffsetYRatio) { _ in scheduleApplyCurrentCircle() }
+    }
+
+    private var labelSliderPanel: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 18) {
+                sliderCell(title: "Center · horizontal", value: $centerX, range: 0...1)
+                sliderCell(title: "Center · vertical", value: $centerY, range: 0...1)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            .padding(.bottom, 14)
+
+            Divider()
+
+            sliderCell(title: "Label size", value: $radiusRatio, range: 0.1...0.6)
+                .padding(.horizontal, 18)
+                .padding(.top, 14)
+                .padding(.bottom, 18)
+        }
+    }
+
+    private var holeSliderPanel: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center) {
+                Text("Drag the hole on the image to reposition")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(Color.black.opacity(0.55))
+                    .multilineTextAlignment(.leading)
+
+                Spacer(minLength: 8)
+
+                Button("Re-detect") {
+                    redetectCenterHole()
+                }
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.blue)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            .padding(.bottom, 14)
+
+            Divider()
+
+            sliderCell(title: "Hole size", value: $holeRadiusToLabelRatio, range: 0...0.55)
+                .padding(.horizontal, 18)
+                .padding(.top, 14)
+                .padding(.bottom, 14)
+
+            Divider()
+
+            HStack(spacing: 18) {
+                sliderCell(title: "Hole · horizontal", value: $holeOffsetXRatio, range: -0.2...0.2)
+                sliderCell(title: "Hole · vertical", value: $holeOffsetYRatio, range: -0.2...0.2)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+            .padding(.bottom, 18)
+        }
     }
 
     private var outputArea: some View {
@@ -513,6 +608,7 @@ struct ContentView: View {
     private func processImage() {
         guard let sourceImage else { return }
 
+        activeTab = .label
         let requestID = UUID()
         processingRequestID = requestID
         isProcessing = true
