@@ -1,7 +1,9 @@
 import AVFoundation
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct PhotoLibraryPicker: UIViewControllerRepresentable {
     let onImagePicked: (UIImage) -> Void
@@ -36,13 +38,13 @@ struct PhotoLibraryPicker: UIViewControllerRepresentable {
 
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             guard let provider = results.first?.itemProvider,
-                  provider.canLoadObject(ofClass: UIImage.self) else {
+                  provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) else {
                 parent.dismiss()
                 return
             }
 
-            provider.loadObject(ofClass: UIImage.self) { object, _ in
-                guard let image = object as? UIImage else {
+            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                guard let data, let image = UIImage(data: data) else {
                     DispatchQueue.main.async {
                         self.parent.dismiss()
                     }
@@ -76,12 +78,16 @@ struct NativeCameraCaptureView: View {
 
                     ZStack {
                         if model.authorizationStatus == .authorized {
-                            CameraPreview(session: model.session)
+                            CameraPreview(model: model, session: model.session)
                             CameraCrosshairOverlay()
                         }
                     }
                     .frame(width: squareSide, height: squareSide)
                     .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture { location in
+                        model.focus(at: location)
+                    }
 
                     Spacer(minLength: 0)
                 }
@@ -143,6 +149,7 @@ struct NativeCameraCaptureView: View {
         .onAppear {
             model.onPhotoCaptured = onImageCaptured
             model.prepareSession(requestPermissionIfNeeded: true) {
+                model.focusOnCenterIfReady()
                 onReady?()
             }
         }
@@ -151,6 +158,7 @@ struct NativeCameraCaptureView: View {
         }
         .onChange(of: model.authorizationStatus) { status in
             if status == .authorized {
+                model.focusOnCenterIfReady()
                 onReady?()
             }
         }
@@ -186,17 +194,20 @@ private struct CameraCrosshairOverlay: View {
 }
 
 private struct CameraPreview: UIViewRepresentable {
+    @ObservedObject var model: CameraCaptureModel
     let session: AVCaptureSession
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.previewLayer.videoGravity = .resizeAspectFill
         view.previewLayer.session = session
+        model.setPreviewView(view)
         return view
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
         uiView.previewLayer.session = session
+        model.setPreviewView(uiView)
     }
 }
 
@@ -208,6 +219,10 @@ private final class PreviewView: UIView {
             fatalError("Expected AVCaptureVideoPreviewLayer")
         }
         return layer
+    }
+
+    func devicePoint(for viewPoint: CGPoint) -> CGPoint {
+        previewLayer.captureDevicePointConverted(fromLayerPoint: viewPoint)
     }
 }
 
@@ -222,8 +237,17 @@ final class CameraCaptureModel: NSObject, ObservableObject {
     private let sessionQueue = DispatchQueue(label: "purelabel.camera.session")
     private var isConfigured = false
     private var isSessionRunning = false
+    private var captureDevice: AVCaptureDevice?
+    private weak var previewView: PreviewView?
+    private var lastFocusPoint = CGPoint(x: 0.5, y: 0.5)
 
     var onPhotoCaptured: ((UIImage) -> Void)?
+
+    fileprivate func setPreviewView(_ view: PreviewView) {
+        DispatchQueue.main.async {
+            self.previewView = view
+        }
+    }
 
     func warmupIfAuthorized() {
         let current = AVCaptureDevice.authorizationStatus(for: .video)
@@ -271,9 +295,26 @@ final class CameraCaptureModel: NSObject, ObservableObject {
         }
     }
 
+    func focus(at viewPoint: CGPoint) {
+        guard let preview = previewView else { return }
+        sessionQueue.async {
+            let devicePoint = preview.devicePoint(for: viewPoint)
+            self.lastFocusPoint = devicePoint
+            self.applyFocus(at: devicePoint, lock: false)
+        }
+    }
+
+    func focusOnCenterIfReady() {
+        guard let preview = previewView else { return }
+        let center = CGPoint(x: preview.bounds.midX, y: preview.bounds.midY)
+        focus(at: center)
+    }
+
     func capturePhoto() {
         sessionQueue.async {
+            self.lockFocusAndExposure()
             let settings = AVCapturePhotoSettings()
+            settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
             settings.flashMode = .off
             self.photoOutput.capturePhoto(with: settings, delegate: self)
         }
@@ -307,12 +348,14 @@ final class CameraCaptureModel: NSObject, ObservableObject {
             return
         }
         session.addInput(input)
+        captureDevice = device
 
         guard session.canAddOutput(photoOutput) else {
             session.commitConfiguration()
             return
         }
         session.addOutput(photoOutput)
+        photoOutput.maxPhotoQualityPrioritization = .quality
 
         if let connection = photoOutput.connection(with: .video), connection.isVideoOrientationSupported {
             connection.videoOrientation = .portrait
@@ -321,31 +364,110 @@ final class CameraCaptureModel: NSObject, ObservableObject {
         session.commitConfiguration()
         isConfigured = true
     }
+
+    private func lockFocusAndExposure() {
+        applyFocus(at: lastFocusPoint, lock: true)
+    }
+
+    private func applyFocus(at point: CGPoint, lock: Bool) {
+        guard let device = captureDevice else { return }
+
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+
+            if device.isFocusPointOfInterestSupported {
+                device.focusPointOfInterest = point
+                if lock, device.isFocusModeSupported(.locked) {
+                    device.focusMode = .locked
+                } else if device.isFocusModeSupported(.autoFocus) {
+                    device.focusMode = .autoFocus
+                } else if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                }
+            }
+
+            if device.isExposurePointOfInterestSupported {
+                device.exposurePointOfInterest = point
+                if lock, device.isExposureModeSupported(.locked) {
+                    device.exposureMode = .locked
+                } else if device.isExposureModeSupported(.continuousAutoExposure) {
+                    device.exposureMode = .continuousAutoExposure
+                } else if device.isExposureModeSupported(.autoExpose) {
+                    device.exposureMode = .autoExpose
+                }
+            }
+        } catch {
+            return
+        }
+    }
 }
 
 extension CameraCaptureModel: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        guard error == nil, let data = photo.fileDataRepresentation(), let image = UIImage(data: data) else {
+        guard error == nil,
+              let cgImage = photo.cgImageRepresentation() else {
             return
         }
 
+        let orientation = Self.imageOrientation(from: photo)
+        let image = UIImage(cgImage: cgImage, scale: 1.0, orientation: orientation)
         let squareImage = Self.squareCenterCropped(image)
+
         DispatchQueue.main.async {
             self.onPhotoCaptured?(squareImage)
         }
     }
 
-    private static func squareCenterCropped(_ image: UIImage) -> UIImage {
-        let size = image.size
-        let side = min(size.width, size.height)
-        guard side > 0 else { return image }
+    private static func imageOrientation(from photo: AVCapturePhoto) -> UIImage.Orientation {
+        guard let raw = photo.metadata[kCGImagePropertyOrientation as String] as? UInt32,
+              let cgOrientation = CGImagePropertyOrientation(rawValue: raw) else {
+            return .right
+        }
+        return UIImage.Orientation(cgOrientation)
+    }
 
-        let origin = CGPoint(x: (size.width - side) / 2, y: (size.height - side) / 2)
+    private static func orientationNormalized(_ image: UIImage) -> UIImage {
+        guard image.imageOrientation != .up else { return image }
+
         let format = UIGraphicsImageRendererFormat()
         format.scale = image.scale
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
+        let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
         return renderer.image { _ in
-            image.draw(at: CGPoint(x: -origin.x, y: -origin.y))
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+        }
+    }
+
+    private static func squareCenterCropped(_ image: UIImage) -> UIImage {
+        let normalized = orientationNormalized(image)
+        guard let cgImage = normalized.cgImage else { return image }
+
+        let width = cgImage.width
+        let height = cgImage.height
+        let side = min(width, height)
+        guard side > 0 else { return image }
+
+        let x = (width - side) / 2
+        let y = (height - side) / 2
+        let cropRect = CGRect(x: x, y: y, width: side, height: side).integral
+
+        guard let cropped = cgImage.cropping(to: cropRect) else { return image }
+        return UIImage(cgImage: cropped, scale: normalized.scale, orientation: .up)
+    }
+}
+
+private extension UIImage.Orientation {
+    init(_ cgOrientation: CGImagePropertyOrientation) {
+        switch cgOrientation {
+        case .up: self = .up
+        case .upMirrored: self = .upMirrored
+        case .down: self = .down
+        case .downMirrored: self = .downMirrored
+        case .left: self = .left
+        case .leftMirrored: self = .leftMirrored
+        case .right: self = .right
+        case .rightMirrored: self = .rightMirrored
+        @unknown default: self = .up
         }
     }
 }
